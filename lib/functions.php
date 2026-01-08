@@ -41,12 +41,34 @@ function generate_token($length = 64) {
     return bin2hex(random_bytes($length/2));
 }
 
+/**
+ * send_mail_smtp - tenta carregar PHPMailer manualmente (lib/phpmailer/src/)
+ * Se os ficheiros forem encontrados, usa PHPMailer\PHPMailer\PHPMailer.
+ * Caso contrário, faz fallback para mail().
+ *
+ * Retorna true se email foi enviado com sucesso, false caso contrário.
+ */
 function send_mail_smtp($to, $subject, $body) {
-    $composerAutoload = __DIR__ . '/../vendor/autoload.php';
-    if (file_exists($composerAutoload)) {
-        require_once $composerAutoload;
+    // caminho onde esperamos encontrar PHPMailer manualmente instalado
+    $phpmailer_src = __DIR__ . '/phpmailer/src';
+    $phpmailer_files = [
+        $phpmailer_src . '/PHPMailer.php',
+        $phpmailer_src . '/SMTP.php',
+        $phpmailer_src . '/Exception.php'
+    ];
+
+    $have_phpmailer = true;
+    foreach ($phpmailer_files as $f) if (!file_exists($f)) { $have_phpmailer = false; break; }
+
+    if ($have_phpmailer) {
+        // carrega manualmente os ficheiros e usa o namespace PHPMailer\PHPMailer
+        require_once $phpmailer_files[2]; // Exception.php
+        require_once $phpmailer_files[1]; // SMTP.php
+        require_once $phpmailer_files[0]; // PHPMailer.php
+
         try {
             $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+            // configurações SMTP
             $mail->isSMTP();
             $mail->Host = SMTP_HOST;
             $mail->SMTPAuth = true;
@@ -54,17 +76,34 @@ function send_mail_smtp($to, $subject, $body) {
             $mail->Password = SMTP_PASS;
             if (!empty(SMTP_SECURE)) $mail->SMTPSecure = SMTP_SECURE;
             $mail->Port = SMTP_PORT;
-            $mail->setFrom(MAIL_FROM, MAIL_FROM_NAME);
+            // opcional: definir timeout
+            $mail->Timeout = 30;
+            $mail->SMTPOptions = [
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                    'allow_self_signed' => true
+                ]
+            ];
+
+            $mail->setFrom(MAIL_FROM, MAIL_FROM_NAME ?? 'Txeka');
             $mail->addAddress($to);
             $mail->Subject = $subject;
             $mail->Body = $body;
             $mail->AltBody = strip_tags($body);
             $mail->isHTML(false);
+
             return $mail->send();
         } catch (Exception $e) {
-            error_log("PHPMailer fail: " . $e->getMessage());
+            error_log("PHPMailer Exception: " . $e->getMessage());
+            // segue para fallback mail()
+        } catch (Throwable $t) {
+            error_log("PHPMailer Throwable: " . $t->getMessage());
         }
+    } else {
+        error_log("PHPMailer não encontrado em lib/phpmailer/src - usando mail()");
     }
+
     // fallback para mail()
     $headers = "From: " . MAIL_FROM . "\r\n" .
                "Reply-To: " . MAIL_FROM . "\r\n" .
